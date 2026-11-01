@@ -1,47 +1,57 @@
-(function() {
-  const loader = document.getElementById('loader');
-  const loaderReveal = document.getElementById('loaderReveal');
-  const loaderLine = document.getElementById('loaderLine');
-  const loaderPct = document.getElementById('loaderPct');
-  const loaderStatus = document.getElementById('loaderStatus');
+/* Loading screen: shows real progress (fonts, images, page load) and hides itself when done. */
+(function () {
+  "use strict";
+  var el = document.getElementById("loader");
+  if (!el) return;
+  var pctEl = document.getElementById("loaderPct");
+  var barEl = document.getElementById("loaderBar");
+  var stEl = document.getElementById("loaderStatus");
+  var bg = el.querySelector(".scene-img");
+  if (bg && bg.complete && bg.naturalWidth) bg.classList.add("ready");
 
-  if (!loader) return;
+  var MIN_MS = 1400;   // never flash by faster than this
+  var MAX_MS = 8000;   // never block the page longer than this
+  var fontsDone = !(document.fonts && document.fonts.ready);
+  var loadDone = document.readyState === "complete";
+  if (!fontsDone) document.fonts.ready.then(function () { fontsDone = true; }, function () { fontsDone = true; });
+  window.addEventListener("load", function () { loadDone = true; });
 
-  const statuses = [
-    "Initializing neural core...",
-    "Calibrating servo controllers...",
-    "Loading AI weights...",
-    "Establishing telemetry...",
-    "System online."
-  ];
-
-  let progress = 0;
-  const startTime = performance.now();
-  const minMs = 900;
-  const maxMs = 2500;
-
-  function updateLoader(now) {
-    const elapsed = now - startTime;
-    progress = Math.min(100, Math.floor((elapsed / minMs) * 100));
-
-    if (loaderPct) loaderPct.innerText = progress + '%';
-    if (loaderReveal) loaderReveal.style.clipPath = `inset(0 ${100 - progress}% 0 0)`;
-    if (loaderLine) loaderLine.style.left = progress + '%';
-
-    let statusIdx = Math.min(statuses.length - 1, Math.floor((progress / 100) * statuses.length));
-    if (loaderStatus) loaderStatus.innerText = statuses[statusIdx];
-
-    if (progress < 100 && elapsed < maxMs) {
-      requestAnimationFrame(updateLoader);
-    } else {
-      if (loaderPct) loaderPct.innerText = '100%';
-      if (loaderReveal) loaderReveal.style.clipPath = 'inset(0 0 0 0)';
-      if (loaderLine) loaderLine.style.left = '100%';
-      setTimeout(() => {
-        loader.classList.add('done');
-      }, 300);
-    }
+  function imgFrac() {
+    var list = [].slice.call(document.images).filter(function (im) { return im.loading !== "lazy"; });
+    if (!list.length) return 1;
+    var ok = list.filter(function (im) { return im.complete; }).length;
+    return ok / list.length;
+  }
+  function target() {
+    return 10 + (fontsDone ? 30 : 0) + imgFrac() * 25 + (loadDone ? 35 : 0);
   }
 
-  requestAnimationFrame(updateLoader);
+  var start = null, shown = 0, finished = false, stage = "";
+  function paint(p) {
+    var r = Math.max(0, Math.min(100, p));
+    pctEl.textContent = Math.round(r) + "%";
+    if (barEl) barEl.style.width = r + "%";
+    // screen readers get an update every quarter, not every frame
+    var name = r >= 100 ? "Loaded" : "Loading " + Math.floor(r / 25) * 25 + " percent";
+    if (name !== stage) { stage = name; stEl.textContent = name; }
+  }
+  function finish() {
+    if (finished) return;
+    finished = true;
+    paint(100);
+    setTimeout(function () { el.classList.add("done"); }, 350);
+    setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 1200);
+  }
+  function frame(now) {
+    if (finished) return;
+    if (start === null) start = now;
+    var spent = now - start;
+    var goal = Math.min(spent > MAX_MS ? 100 : target(), Math.min(100, spent / MIN_MS * 100));
+    shown += (goal - shown) * 0.12;
+    if (goal - shown < 0.3) shown = goal;
+    paint(shown);
+    if (shown >= 100) finish(); else requestAnimationFrame(frame);
+  }
+  paint(0);
+  requestAnimationFrame(frame);
 })();

@@ -1,145 +1,571 @@
-/* --- Hero Interactive Human Pick & Place Simulation --- */
-(function() {
-  const canvas = document.getElementById('scan');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const rdAngle = document.getElementById('rdAngle');
-  const rdPts = document.getElementById('rdPts');
+(function () {
+  "use strict";
+  var C = window.INDRA || {};
+  var MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-  let placedCount = 0;
-  const targetCount = 5;
-  
-  // Mouse / Touch position tracking
-  let mouse = { x: canvas.width / 2, y: canvas.height / 2, active: false };
-
-  function resizeCanvas() {
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * window.devicePixelRatio;
-    canvas.height = rect.height * window.devicePixelRatio;
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
   }
-  resizeCanvas();
-  window.addEventListener('resize', resizeCanvas);
+  function parseDate(s) {
+    if (!s) return null;
+    var p = s.split("-");
+    return new Date(+p[0], +p[1] - 1, +p[2]);
+  }
+  function endOfDay(s) {
+    var d = parseDate(s);
+    return d ? new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59) : null;
+  }
+  function safeUrl(u) {
+    return /^(https?:|mailto:)/i.test(u || "") ? u : "";
+  }
+  var now = new Date();
+  var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  canvas.addEventListener('mousemove', (e) => {
-    const rect = canvas.getBoundingClientRect();
-    mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
-    mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
-    mouse.active = true;
+  /* ---------- Announcements ---------- */
+  var box = document.getElementById("announcements");
+  (C.announcements || []).forEach(function (a) {
+    var from = parseDate(a.from), until = endOfDay(a.until);
+    if ((from && now < from) || (until && now > until)) return;
+    var note = el("div", "note");
+    note.appendChild(el("p", null, a.text || ""));
+    if (a.linkUrl && safeUrl(a.linkUrl)) {
+      var l = el("a", null, a.linkText || "Learn more");
+      l.href = a.linkUrl; l.target = "_blank"; l.rel = "noopener";
+      note.appendChild(l);
+    }
+    box.appendChild(note);
   });
 
-  canvas.addEventListener('touchmove', (e) => {
-    const rect = canvas.getBoundingClientRect();
-    if (e.touches.length > 0) {
-      mouse.x = (e.touches[0].clientX - rect.left) * (canvas.width / rect.width);
-      mouse.y = (e.touches[0].clientY - rect.top) * (canvas.height / rect.height);
-      mouse.active = true;
+  /* ---------- Events ---------- */
+  function eventCard(e) {
+    var d = parseDate(e.date);
+    var card = el("article", "event");
+    var tile = el("div", "date-tile");
+    if (d) {
+      tile.appendChild(el("span", "d", String(d.getDate())));
+      tile.appendChild(el("span", "m", MONTHS[d.getMonth()]));
+      tile.appendChild(el("span", "y", String(d.getFullYear())));
     }
-  }, {passive: true});
-
-  let blocks = [
-    { x: 120, y: 320, color: '#EAAA00', carried: false, placed: false },
-    { x: 180, y: 340, color: '#DDE3E8', carried: false, placed: false },
-    { x: 240, y: 310, color: '#3A0F34', carried: false, placed: false },
-    { x: 300, y: 350, color: '#EAAA00', carried: false, placed: false },
-    { x: 360, y: 325, color: '#DDE3E8', carried: false, placed: false }
-  ];
-
-  let armX = canvas.width / 2;
-  let armY = canvas.height / 3;
-
-  function animate() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Smooth follow human cursor/touch
-    if (mouse.active) {
-      armX += (mouse.x - armX) * 0.15;
-      armY += (mouse.y - armY) * 0.15;
-    } else {
-      armX = canvas.width * 0.5 + Math.sin(Date.now() / 1000) * 80;
-      armY = canvas.height * 0.4;
+    var body = el("div");
+    body.appendChild(el("h4", null, e.title || "Event"));
+    var meta = [e.time, e.venue].filter(Boolean).join(", ");
+    if (meta) body.appendChild(el("div", "meta", meta));
+    if (e.description) body.appendChild(el("p", null, e.description));
+    if (e.linkUrl && safeUrl(e.linkUrl)) {
+      var a = el("a", null, e.linkText || "More details");
+      a.href = e.linkUrl; a.target = "_blank"; a.rel = "noopener";
+      body.appendChild(a);
     }
+    card.appendChild(tile); card.appendChild(body);
+    return card;
+  }
+  var events = (C.events || []).filter(function (e) { return parseDate(e.date); });
+  var upcoming = events.filter(function (e) { return parseDate(e.date) >= today; })
+    .sort(function (a, b) { return parseDate(a.date) - parseDate(b.date); });
+  var past = events.filter(function (e) { return parseDate(e.date) < today; })
+    .sort(function (a, b) { return parseDate(b.date) - parseDate(a.date); });
 
-    // Draw Drop Target Zone
-    ctx.strokeStyle = '#EAAA00';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 6]);
-    ctx.strokeRect(canvas.width - 140, canvas.height - 130, 100, 90);
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(234, 170, 0, 0.08)';
-    ctx.fillRect(canvas.width - 140, canvas.height - 130, 100, 90);
-    ctx.fillStyle = '#EAAA00';
-    ctx.font = '12px "IBM Plex Sans", sans-serif';
-    ctx.fillText("DROP ZONE (HUMAN)", canvas.width - 140, canvas.height - 140);
+  var upEl = document.getElementById("eventsUpcoming");
+  var pastEl = document.getElementById("eventsPast");
+  pastEl.classList.add("past");
+  if (upcoming.length) upcoming.forEach(function (e) { upEl.appendChild(eventCard(e)); });
+  else upEl.appendChild(el("p", "empty", "No events are scheduled right now. Follow us on Instagram to hear first."));
+  if (past.length) past.forEach(function (e) { pastEl.appendChild(eventCard(e)); });
+  else document.getElementById("pastHeading").hidden = true;
 
-    // Draw Blocks & Handle Pickup
-    let activeBlockCarried = false;
-    blocks.forEach((b, idx) => {
-      if (!b.placed) {
-        let dist = Math.hypot(armX - b.x, armY - b.y);
-        if (dist < 35 && !activeBlockCarried) {
-          b.x = armX;
-          b.y = armY + 20;
-          b.carried = true;
-          activeBlockCarried = true;
-          
-          // Check if dropped in target zone
-          if (b.x > canvas.width - 140 && b.x < canvas.width - 40 && b.y > canvas.height - 130 && b.y < canvas.height - 40) {
-            b.placed = true;
-            b.carried = false;
-            placedCount = Math.min(targetCount, placedCount + 1);
-          }
-        } else if (!activeBlockCarried) {
-          b.carried = false;
-        }
+  /* ---------- Gallery ---------- */
+  var grid = document.getElementById("galleryGrid");
+  var lb = document.getElementById("lightbox");
+  var lbImg = document.getElementById("lightboxImg");
+  var lbCap = document.getElementById("lightboxCap");
+  var photos = C.gallery || [];
+  if (!photos.length) grid.appendChild(el("p", "empty", "Photos coming soon."));
+  photos.forEach(function (p) {
+    var fig = el("button", "shot");
+    fig.type = "button";
+    var img = new Image();
+    img.loading = "lazy";
+    img.alt = p.alt || p.caption || "";
+    img.src = p.src;
+    img.onerror = function () {
+      fig.className = "shot placeholder";
+      fig.disabled = true;
+      fig.textContent = "Photo coming soon" + (p.caption ? ": " + p.caption : "");
+    };
+    fig.appendChild(img);
+    if (p.caption) fig.appendChild(el("span", "cap", p.caption));
+    fig.addEventListener("click", function () {
+      lbImg.src = p.src; lbImg.alt = img.alt; lbCap.textContent = p.caption || "";
+      if (lb.showModal) lb.showModal();
+    });
+    grid.appendChild(fig);
+  });
+  lb.addEventListener("click", function (e) { if (e.target === lb) lb.close(); });
 
-        ctx.fillStyle = b.color;
-        ctx.fillRect(b.x - 15, b.y - 15, 30, 30);
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(b.x - 15, b.y - 15, 30, 30);
-      } else {
-        // Render placed inside zone
-        let targetX = canvas.width - 120 + (idx * 16) % 80;
-        let targetY = canvas.height - 100 + Math.floor(idx / 5) * 30;
-        ctx.fillStyle = b.color;
-        ctx.fillRect(targetX, targetY, 24, 24);
+  /* ---------- Membership ---------- */
+  var m = C.membership || {};
+  var closes = endOfDay(m.closesOn);
+  var memberOpen = m.open === true && (!closes || now <= closes);
+  if (memberOpen) {
+    document.getElementById("join").hidden = false;
+    document.getElementById("navJoin").hidden = false;
+    document.getElementById("joinTitle").textContent = m.title || "Join Indra";
+    document.getElementById("joinText").textContent = m.text || "";
+    if (closes) {
+      var d = parseDate(m.closesOn);
+      document.getElementById("joinDeadline").textContent =
+        "Applications close on " + d.getDate() + " " + MONTHS[d.getMonth()] + " " + d.getFullYear() + ".";
+    }
+    var btn = document.getElementById("joinBtn");
+    var url = safeUrl(m.formUrl);
+    if (url) {
+      btn.href = url;
+      if (m.embed) {
+        btn.hidden = true;
+        var frame = document.createElement("iframe");
+        frame.src = url; frame.title = "Membership form"; frame.loading = "lazy";
+        var holder = document.getElementById("joinEmbed");
+        holder.hidden = false; holder.appendChild(frame);
+        document.querySelector(".join").classList.add("has-embed");
       }
+    } else {
+      btn.removeAttribute("href");
+      btn.setAttribute("aria-disabled", "true");
+      btn.textContent = "Form link coming soon";
+    }
+  }
+
+  /* ---------- Social links ---------- */
+  var s = C.social || {};
+  var links = document.getElementById("socialLinks");
+  var ICONS = {
+    linkedin: '<path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>',
+    instagram: '<path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/>',
+    email: '<path d="M2 5h20a1 1 0 011 1v12a1 1 0 01-1 1H2a1 1 0 01-1-1V6a1 1 0 011-1zm1.6 2L12 12.6 20.4 7H3.6zM3 8.8V17h18V8.8l-9 6-9-6z"/>'
+  };
+  [["LinkedIn", s.linkedin, "linkedin"], ["Instagram", s.instagram, "instagram"], ["Email us", s.email ? "mailto:" + s.email : "", "email"]]
+    .forEach(function (x) {
+      if (!x[1]) return;
+      var a = el("a", "btn btn-ghost btn-social");
+      a.href = x[1];
+      if (x[1].indexOf("http") === 0) { a.target = "_blank"; a.rel = "noopener"; }
+      a.insertAdjacentHTML("beforeend",
+        '<svg class="icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="currentColor">' + ICONS[x[2]] + "</svg>");
+      a.appendChild(el("span", null, x[0]));
+      links.appendChild(a);
     });
 
-    // Draw Human-Controlled Gantry Arm
-    ctx.strokeStyle = '#DDE3E8';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(canvas.width / 2, 20);
-    ctx.lineTo(armX, 20);
-    ctx.stroke();
+  document.getElementById("year").textContent = "\u00A9 " + now.getFullYear() + " Indra";
 
-    ctx.strokeStyle = '#EAAA00';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(armX, 20);
-    ctx.lineTo(armX, armY);
-    ctx.stroke();
+  /* ---------- Extra sections from config.sections ---------- */
+  var navEl = document.querySelector(".nav nav");
+  var navContact = navEl && navEl.querySelector('a[href="#contact"]');
+  var lastAfter = {};
+  (C.sections || []).forEach(function (sec) {
+    if (!sec || !sec.title) return;
+    var id = String(sec.id || sec.title).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "section";
+    if (document.getElementById(id)) id = id + "-x";
+    var anchorId = ["about", "events", "gallery"].indexOf(sec.after) > -1 ? sec.after : "gallery";
+    var anchor = lastAfter[anchorId] || document.getElementById(anchorId);
+    if (!anchor) return;
 
-    // Gripper claw
-    ctx.fillStyle = '#3A0F34';
-    ctx.fillRect(armX - 12, armY, 24, 16);
-    ctx.strokeStyle = '#EAAA00';
-    ctx.strokeRect(armX - 12, armY, 24, 16);
+    var section = el("section", "section" + (sec.theme === "light" ? " section-light" : ""));
+    section.id = id;
+    var wrap = el("div", "wrap");
+    wrap.appendChild(el("h2", null, sec.title));
+    if (sec.intro) wrap.appendChild(el("p", "lead", sec.intro));
+    var cards = el("div", "cards");
+    (sec.items || []).forEach(function (it) {
+      if (!it || !it.title) return;
+      var card = el("article", "card");
+      if (it.image) {
+        var img = new Image();
+        img.loading = "lazy"; img.alt = it.alt || it.title; img.src = it.image;
+        img.className = "card-img";
+        img.onerror = function () { img.remove(); };
+        card.appendChild(img);
+      }
+      var body = el("div", "card-body");
+      if (it.tag) body.appendChild(el("span", "tag", it.tag));
+      body.appendChild(el("h3", null, it.title));
+      if (it.text) body.appendChild(el("p", null, it.text));
+      if (it.linkUrl && safeUrl(it.linkUrl)) {
+        var a = el("a", "card-link", it.linkText || "Learn more");
+        a.href = it.linkUrl; a.target = "_blank"; a.rel = "noopener";
+        body.appendChild(a);
+      }
+      card.appendChild(body);
+      cards.appendChild(card);
+    });
+    wrap.appendChild(cards);
+    section.appendChild(wrap);
+    anchor.parentNode.insertBefore(section, anchor.nextSibling);
+    lastAfter[anchorId] = section;
 
-    // Update Readouts
-    if (rdAngle) rdAngle.innerText = `X ${Math.round(armX)}  Y ${Math.round(armY)}  [HUMAN DRIVE]`;
-    if (rdPts) rdPts.innerText = `placed ${placedCount}/${targetCount}`;
+    if (navEl) {
+      var link = el("a", null, sec.title);
+      link.href = "#" + id;
+      navEl.insertBefore(link, navContact || document.getElementById("navJoin"));
+    }
+  });
 
-    // Reset if all placed
-    if (placedCount >= targetCount) {
-      setTimeout(() => {
-        blocks.forEach(b => { b.placed = false; b.x = 80 + Math.random() * 250; b.y = 300 + Math.random() * 50; });
-        placedCount = 0;
-      }, 1500);
+  /* ---------- Contact form (emailed through FormSubmit) ---------- */
+  var cf = document.getElementById("contactForm");
+  var toEmail = (C.contact && C.contact.email) || "";
+  if (cf && toEmail) {
+    var cStatus = document.getElementById("cStatus"), cSend = document.getElementById("cSend");
+    cf.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      cStatus.className = "status";
+      if (!cf.checkValidity()) {
+        cStatus.textContent = "Please fill in your name, a valid email and a message.";
+        cStatus.className = "status err";
+        cf.reportValidity();
+        return;
+      }
+      var fd = new FormData(cf);
+      if (fd.get("_honey")) return; // bot
+      var payload = {
+        name: fd.get("name"), email: fd.get("email"), message: fd.get("message"),
+        _subject: "Indra website: message from " + fd.get("name"),
+        _template: "table", _captcha: "false"
+      };
+      cSend.disabled = true; cStatus.textContent = "Sending...";
+      fetch("https://formsubmit.co/ajax/" + encodeURIComponent(toEmail), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify(payload)
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d && (d.success === true || d.success === "true")) {
+          cf.reset();
+          cStatus.textContent = "Message sent. We will reply to your email soon.";
+          cStatus.className = "status ok";
+        } else { throw new Error("failed"); }
+      }).catch(function () {
+        cStatus.className = "status err";
+        cStatus.textContent = "Could not send the message. Please email us directly at " + toEmail + ".";
+      }).then(function () { cSend.disabled = false; });
+    });
+  }
+
+  /* ---------- Hero: pick and place robot that you drive yourself ---------- */
+  (function () {
+    var cv = document.getElementById("scan");
+    if (!cv || !cv.getContext) return;
+    var ctx = cv.getContext("2d");
+    var stage = document.getElementById("stage") || cv.parentNode;
+    var rig = stage.parentNode;
+    var rdA = document.getElementById("rdAngle"), rdP = document.getElementById("rdPts");
+    var hintEl = document.getElementById("rigHint");
+    var gripBtn = document.getElementById("gripBtn"), resetBtn = document.getElementById("resetBtn");
+    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var PI = Math.PI, D2R = PI / 180;
+
+    /* ---- Easy settings ---- */
+    var LETTERS = ["I", "N", "D", "R", "A"];            // what you build
+    var TILT_MIN = 14, TILT_MAX = 30;                   // how far (degrees) each block lies tilted on the belt
+    var SPEED_X = 190, SPEED_Y = 150, SPEED_A = 75;     // robot speed: px/s sideways, px/s up-down, degrees/s turning
+    var TOL_X = 11, TOL_Y = 10, TOL_A = 9;              // how precise you must be: px, px, degrees
+
+    /* ---- Colours come from the CSS variables at the top of style.css ---- */
+    var cs = getComputedStyle(document.documentElement);
+    function css(name, fb) { var v = cs.getPropertyValue(name).trim(); return v || fb; }
+    var ACC = css("--accent", "#D4FF24"), BLUE = css("--blue", "#1558C9"), INK = css("--black", "#030407");
+
+    /* ---- Layout (600 x 450 drawing units) ---- */
+    var BS = 34, HB = BS / 2, GRIP = 10, OFF = GRIP + HB;
+    var RAIL_Y = 66, HOME_Y = 138, Y_MIN = 104;
+    var BELT_TOP = 372, SHELF_TOP = 304, FLOOR = 412;
+    var PICK_X = 104, HOME_X = 300, SHELF_CX = 430, PITCH = 48;
+    var N = LETTERS.length;
+    var W = 0, H = 0, dpr = 1, sc = 1, ox = 0, oy = 0, visible = true;
+
+    function slotX(i) { return SHELF_CX + (i - (N - 1) / 2) * PITCH; }
+    var SH_L = slotX(0) - PITCH / 2 - 8, SH_W = N * PITCH + 16, SH_R = SH_L + SH_W;
+    function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+    function mix(a, b, f) { return a + (b - a) * f; }
+    function out(x) { return 1 - Math.pow(1 - x, 3); }
+    function half(a) { return HB * (Math.abs(Math.cos(a)) + Math.abs(Math.sin(a))); }
+    function wrap90(x) { return ((x + PI / 4) % (PI / 2) + PI / 2) % (PI / 2) - PI / 4; }
+    function surfY(x) { return (x > -10 && x < 204) ? BELT_TOP : (x > SH_L && x < SH_R) ? SHELF_TOP : FLOOR; }
+
+    /* ---- State ---- */
+    var arm, cur, placed, belt, done, nextAt, gripChecked, goX, msg, msgUntil, now = 0;
+    var keys = { left: false, right: false, up: false, down: false, rotL: false, rotR: false };
+
+    function say(t) { msg = t; msgUntil = now + 2600; }
+    function spawn() {
+      var a = (Math.random() < 0.5 ? -1 : 1) * (TILT_MIN + Math.random() * (TILT_MAX - TILT_MIN)) * D2R;
+      cur = { ch: LETTERS[placed.length], x: reduce ? PICK_X : -40, y: BELT_TOP - half(a), a: a, vy: 0, t: 0, state: reduce ? "rest" : "arriving" };
+    }
+    function reset() {
+      arm = { x: HOME_X, y: HOME_Y, a: 0, g: 0, gt: 0 };
+      placed = []; belt = 0; done = false; nextAt = 0; gripChecked = false; goX = null; msg = ""; msgUntil = 0;
+      spawn();
+      syncGrip();
+    }
+    function syncGrip() {
+      if (!gripBtn) return;
+      gripBtn.textContent = arm.gt ? "Open grip" : "Close grip";
+      gripBtn.setAttribute("aria-pressed", arm.gt ? "true" : "false");
     }
 
-    requestAnimationFrame(animate);
-  }
-  requestAnimationFrame(animate);
+    /* where the block sits relative to the gripper: lx sideways, ly down from the wrist, da angle difference */
+    function rel() {
+      var dx = cur.x - arm.x, dy = cur.y - arm.y, ca = Math.cos(arm.a), sa = Math.sin(arm.a);
+      return { lx: dx * ca + dy * sa, ly: -dx * sa + dy * ca, da: wrap90(cur.a - arm.a) };
+    }
+    function tryGrab() {
+      if (!cur || cur.state !== "rest") { say("The grip closed on nothing. Close it around a block."); return; }
+      var r = rel();
+      if (Math.abs(r.lx) > TOL_X) say("Not centred on the block. Move " + (r.lx > 0 ? "right" : "left") + " a little.");
+      else if (Math.abs(r.ly - OFF) > TOL_Y) say(r.ly > OFF ? "Too high. Lower the gripper a little." : "Too low. Raise the gripper a little.");
+      else if (Math.abs(r.da) > TOL_A * D2R) say("Rotate the gripper to match the block's tilt.");
+      else { cur.state = "held"; say("Got it. Lift and carry it to the shelf."); }
+    }
+    function toggleGrip() {
+      arm.gt = arm.gt ? 0 : 1;
+      if (arm.gt) gripChecked = false;
+      else if (cur && cur.state === "held") { cur.state = "falling"; cur.vy = 0; }
+      syncGrip();
+    }
+    function land(sy, h) {
+      cur.y = sy - h; cur.vy = 0;
+      var slot = slotX(placed.length);
+      if (sy === SHELF_TOP && Math.abs(cur.x - slot) <= TOL_X + 3) {
+        if (Math.abs(cur.a) <= TOL_A * D2R) {
+          placed.push({ ch: cur.ch, x: slot });
+          cur = null;
+          if (placed.length === N) { done = true; say("INDRA assembled."); }
+          else { nextAt = now + 700; say("Placed. Next block coming."); }
+          return;
+        }
+        cur.state = "rest"; say("Not upright. Pick it up, rotate to 0° and try again."); return;
+      }
+      cur.state = "rest";
+      say(sy === SHELF_TOP ? "Missed the " + cur.ch + " slot. Pick it up and try again." : "Dropped. Pick it up again.");
+    }
+
+    function update(dt) {
+      var vx = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+      var vy = (keys.down ? 1 : 0) - (keys.up ? 1 : 0);
+      var va = (keys.rotR ? 1 : 0) - (keys.rotL ? 1 : 0);
+      if (vx) { goX = null; arm.x += vx * SPEED_X * dt; }
+      else if (goX !== null) {
+        arm.x += clamp(goX - arm.x, -SPEED_X * dt, SPEED_X * dt);
+        if (Math.abs(goX - arm.x) < 0.5) goX = null;
+      }
+      arm.x = clamp(arm.x, 36, 564);
+      arm.y = Math.max(Y_MIN, arm.y + vy * SPEED_Y * dt);
+      arm.a = clamp(arm.a + va * SPEED_A * D2R * dt, -45 * D2R, 45 * D2R);
+      arm.g = clamp(arm.g + (arm.gt ? 1 : -1) * 3.6 * dt, 0, 1);
+
+      // the gripper cannot go through the belt, shelf or floor
+      var ymax = (cur && cur.state === "held")
+        ? surfY(arm.x - OFF * Math.sin(arm.a)) - half(arm.a) - OFF * Math.cos(arm.a)
+        : surfY(arm.x) - 34;
+      if (arm.y > ymax) arm.y = Math.max(ymax, arm.y - 900 * dt);
+
+      if (arm.gt && arm.g >= 0.9 && !gripChecked) { gripChecked = true; tryGrab(); }
+
+      if (!cur && !done && nextAt && now >= nextAt) { nextAt = 0; spawn(); }
+      if (cur) {
+        if (cur.state === "arriving") {
+          var px = cur.x;
+          cur.t += dt * 1000;
+          var p = Math.min(cur.t / 900, 1);
+          cur.x = mix(-40, PICK_X, out(p));
+          belt += cur.x - px;
+          if (p >= 1) cur.state = "rest";
+        } else if (cur.state === "held") {
+          cur.a = arm.a; cur.x = arm.x - OFF * Math.sin(arm.a); cur.y = arm.y + OFF * Math.cos(arm.a);
+        } else if (cur.state === "falling") {
+          cur.vy += 1400 * dt; cur.y += cur.vy * dt;
+          var sy = surfY(cur.x), h = half(cur.a);
+          if (cur.y + h >= sy) land(sy, h);
+        }
+      }
+    }
+
+    /* the line of help under the robot */
+    function guide() {
+      if (done) return "INDRA assembled. Press Reset to build it again.";
+      if (!cur) return "Next block coming.";
+      if (cur.state === "arriving") return "Block " + cur.ch + " is arriving on the belt.";
+      if (cur.state === "falling") return "";
+      var deg = Math.round(arm.a / D2R);
+      if (cur.state === "held") {
+        var slot = slotX(placed.length);
+        if (Math.abs(cur.x - slot) > TOL_X) return "Carry " + cur.ch + " to the dashed " + cur.ch + " slot on the shelf (move " + (slot > cur.x ? "right" : "left") + ").";
+        if (Math.abs(arm.a) > TOL_A * D2R) return "Rotate back to 0° so the letter stands upright (now " + deg + "°).";
+        if (cur.y < SHELF_TOP - HB - 26) return "Lower it onto the shelf, then open the grip.";
+        return "Open the grip to release it.";
+      }
+      var r = rel();
+      if (Math.abs(r.lx) > TOL_X) return "Move " + (r.lx > 0 ? "right" : "left") + " until the gripper is over block " + cur.ch + ".";
+      if (Math.abs(r.da) > TOL_A * D2R) return "Rotate to about " + Math.round(cur.a / D2R) + "° to match the block (you are at " + deg + "°).";
+      if (Math.abs(r.ly - OFF) > TOL_Y) return r.ly > OFF ? "Lower the gripper onto the block." : "Raise the gripper a little.";
+      return arm.gt ? "Open the grip and try again." : "Close the grip.";
+    }
+
+    /* ---- Drawing ---- */
+    function block(x, y, a, ch, fill) {
+      ctx.save(); ctx.translate(x, y); ctx.rotate(a);
+      ctx.fillStyle = fill;
+      ctx.fillRect(-HB, -HB, BS, BS);
+      ctx.fillStyle = INK; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = "900 21px Archivo, 'Arial Black', Arial, sans-serif";
+      ctx.fillText(ch, 0, 1);
+      ctx.restore();
+    }
+
+    function draw() {
+      var i, x, gx, gy;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+      ctx.setTransform(dpr * sc, 0, 0, dpr * sc, dpr * ox, dpr * oy);
+      ctx.fillStyle = "#0a1430";
+      for (gy = 15; gy < 450; gy += 30) for (gx = 15; gx < 600; gx += 30) ctx.fillRect(gx - 1, gy - 1, 2, 2);
+      ctx.fillStyle = "#16306a"; ctx.fillRect(0, FLOOR, 600, 2);
+
+      // gantry frame and rail
+      ctx.fillStyle = "#1a2f66";
+      ctx.fillRect(14, RAIL_Y, 12, FLOOR - RAIL_Y); ctx.fillRect(574, RAIL_Y, 12, FLOOR - RAIL_Y);
+      ctx.fillStyle = "#e8eef1"; ctx.fillRect(14, RAIL_Y - 4, 572, 10);
+
+      // conveyor
+      ctx.fillStyle = "#1a2f66";
+      ctx.fillRect(40, BELT_TOP + 14, 8, FLOOR - BELT_TOP - 14); ctx.fillRect(150, BELT_TOP + 14, 8, FLOOR - BELT_TOP - 14);
+      ctx.fillStyle = "#070d1f"; ctx.fillRect(-10, BELT_TOP, 214, 14);
+      ctx.strokeStyle = "#3463b8"; ctx.lineWidth = 1; ctx.strokeRect(-9.5, BELT_TOP + 0.5, 213, 13);
+      ctx.fillStyle = "#27498f";
+      for (x = -22 + (((belt % 22) + 22) % 22); x < 204; x += 22) ctx.fillRect(x, BELT_TOP + 6, 10, 2);
+      for (i = 0; i < 2; i++) {
+        var rx = i ? 196 : 4, ra = belt / 7;
+        ctx.fillStyle = "#0c1736"; ctx.strokeStyle = "#4f7fd6";
+        ctx.beginPath(); ctx.arc(rx, BELT_TOP + 7, 8, 0, PI * 2); ctx.fill(); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(rx, BELT_TOP + 7); ctx.lineTo(rx + Math.cos(ra) * 7, BELT_TOP + 7 + Math.sin(ra) * 7); ctx.stroke();
+      }
+      // pick-up zone
+      ctx.setLineDash([3, 3]); ctx.strokeStyle = BLUE; ctx.lineWidth = 1;
+      ctx.strokeRect(PICK_X - 26, BELT_TOP - 44, 52, 44);
+      ctx.setLineDash([]);
+
+      // shelf and slots (the slot you need next is highlighted)
+      ctx.fillStyle = "#1a2f66";
+      ctx.fillRect(SH_L + 14, SHELF_TOP + 10, 8, FLOOR - SHELF_TOP - 10); ctx.fillRect(SH_R - 22, SHELF_TOP + 10, 8, FLOOR - SHELF_TOP - 10);
+      ctx.fillStyle = "#e8eef1"; ctx.fillRect(SH_L, SHELF_TOP, SH_W, 10);
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = "900 21px Archivo, 'Arial Black', Arial, sans-serif"; ctx.lineWidth = 1;
+      for (i = 0; i < N; i++) {
+        var next = i === placed.length && !done;
+        ctx.setLineDash([3, 3]); ctx.strokeStyle = next ? ACC : "#1f3a7a"; ctx.lineWidth = next ? 1.6 : 1;
+        ctx.strokeRect(slotX(i) - HB + 0.5, SHELF_TOP - BS + 0.5, BS - 1, BS - 1);
+        ctx.fillStyle = next ? ACC : "#1f3a7a"; ctx.globalAlpha = next ? 0.55 : 1;
+        ctx.fillText(LETTERS[i], slotX(i), SHELF_TOP - HB + 1);
+        ctx.globalAlpha = 1;
+      }
+      ctx.setLineDash([]);
+
+      for (i = 0; i < placed.length; i++) block(placed[i].x, SHELF_TOP - HB, 0, placed[i].ch, done ? ACC : "#fff");
+      if (cur) block(cur.x, cur.y, cur.a, cur.ch, cur.state === "held" ? ACC : "#fff");
+
+      // carriage, telescoping rod, wrist and gripper
+      var len = arm.y - RAIL_Y - 14;
+      ctx.fillStyle = "#fff"; ctx.fillRect(arm.x - 2, RAIL_Y + 14, 4, len);
+      ctx.fillStyle = "#a9bff0"; ctx.fillRect(arm.x - 4, RAIL_Y + 14, 8, len * 0.55);
+      ctx.fillStyle = BLUE; ctx.fillRect(arm.x - 24, RAIL_Y - 9, 48, 23);
+      ctx.fillStyle = INK; ctx.fillRect(arm.x - 17, RAIL_Y - 2, 8, 8); ctx.fillRect(arm.x + 9, RAIL_Y - 2, 8, 8);
+      ctx.save(); ctx.translate(arm.x, arm.y); ctx.rotate(arm.a);
+      ctx.fillStyle = "#fff"; ctx.fillRect(-31, 0, 62, GRIP);
+      var hg = mix(27, HB + 1, arm.g);
+      ctx.fillRect(-hg - 4, GRIP, 4, 22); ctx.fillRect(hg, GRIP, 4, 22);
+      ctx.restore();
+      ctx.fillStyle = INK; ctx.strokeStyle = ACC; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(arm.x, arm.y, 6, 0, PI * 2); ctx.fill(); ctx.stroke();
+    }
+
+    function readout() {
+      rdA.textContent = "x " + Math.round(arm.x) + "   z " + Math.round(arm.y - Y_MIN) + "   θ " + Math.round(arm.a / D2R) + "°";
+      rdP.textContent = "placed " + placed.length + "/" + N;
+    }
+    var lastHint = "";
+    function hint() {
+      var t = (msg && now < msgUntil) ? msg : guide();
+      if (t && t !== lastHint) { lastHint = t; hintEl.textContent = t; }
+    }
+
+    function build() {
+      var r = stage.getBoundingClientRect();
+      W = Math.round(r.width); H = Math.round(r.height);
+      if (!W || !H) return;
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      cv.width = W * dpr; cv.height = H * dpr;
+      cv.style.width = W + "px"; cv.style.height = H + "px";
+      sc = Math.min(W / 600, H / 450); ox = (W - 600 * sc) / 2; oy = (H - 450 * sc) / 2;
+    }
+
+    var last = null, lastRead = 0;
+    function tick(t) {
+      requestAnimationFrame(tick);
+      if (last === null) last = t;
+      var dt = Math.min((t - last) / 1000, 0.05); last = t;
+      if (!visible || !W) return;
+      now = t;
+      update(dt); draw();
+      if (t - lastRead > 100) { lastRead = t; readout(); hint(); }
+    }
+
+    /* ---- Controls: on-screen buttons (hold to move), keyboard, tap the scene to send the gantry there ---- */
+    function nudge(k) {
+      if (k === "left") arm.x -= 20; else if (k === "right") arm.x += 20;
+      else if (k === "up") arm.y -= 14; else if (k === "down") arm.y += 14;
+      else if (k === "rotL") arm.a -= 5 * D2R; else if (k === "rotR") arm.a += 5 * D2R;
+    }
+    [].forEach.call(rig.querySelectorAll("[data-hold]"), function (b) {
+      var k = b.getAttribute("data-hold");
+      function up() { keys[k] = false; b.classList.remove("on"); }
+      b.addEventListener("pointerdown", function (e) {
+        e.preventDefault(); keys[k] = true; b.classList.add("on");
+        try { b.setPointerCapture(e.pointerId); } catch (x) {}
+      });
+      b.addEventListener("pointerup", up);
+      b.addEventListener("pointercancel", up);
+      b.addEventListener("lostpointercapture", up);
+      b.addEventListener("click", function (e) { if (e.detail === 0) nudge(k); }); // keyboard press on a focused button
+    });
+    var pad = rig.querySelector(".pad");
+    if (pad) pad.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+    if (gripBtn) gripBtn.addEventListener("click", toggleGrip);
+    if (resetBtn) resetBtn.addEventListener("click", reset);
+
+    var KEYMAP = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", q: "rotL", Q: "rotL", e: "rotR", E: "rotR" };
+    stage.addEventListener("keydown", function (e) {
+      var k = KEYMAP[e.key];
+      if (k) { keys[k] = true; e.preventDefault(); }
+      else if (e.key === " " || e.key === "Enter") { e.preventDefault(); if (!e.repeat) toggleGrip(); }
+      else if (e.key === "r" || e.key === "R") { reset(); }
+    });
+    stage.addEventListener("keyup", function (e) { var k = KEYMAP[e.key]; if (k) keys[k] = false; });
+    stage.addEventListener("blur", function () { for (var k in keys) keys[k] = false; });
+    stage.addEventListener("pointerdown", function (e) {
+      try { stage.focus({ preventScroll: true }); } catch (x) { stage.focus(); }
+      var r = stage.getBoundingClientRect();
+      goX = clamp((e.clientX - r.left - ox) / sc, 36, 564);
+    });
+
+    reset();
+    build();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(build);
+    if ("ResizeObserver" in window) {
+      var rt;
+      new ResizeObserver(function () { clearTimeout(rt); rt = setTimeout(build, 120); }).observe(stage);
+    }
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(function (e) { visible = e[0].isIntersecting; }).observe(stage);
+    }
+    requestAnimationFrame(tick);
+  })();
 })();

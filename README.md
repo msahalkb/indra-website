@@ -44,8 +44,9 @@ If the form ever fails, the page shows the email address so people can write dir
 Open `config.js`, find `sections`, and copy the commented example. Remove the `//` at the start of each line and fill it in. Each block becomes a new section on the page and a new link in the top menu. Delete the block to remove the section.
 Photos for cards go in the `images` folder (for example `images/projects/rover.jpg`). Create the folder on GitHub the same way as `images/gallery`.
 
-## Hero animation and loading screen
+## Hero robot, colours and loading screen
 
-- **Hero (pick and place):** in `script.js`, find `Hero: gantry robot` and edit the "Easy settings" at the top of that block. `LETTERS` is what the robot builds, `TILT` is the angle each block lies at (the gripper rotates to match), `SEG` is the timing of each step.
+- **Hero (pick and place, driven by the visitor):** in `script.js`, find `Hero: pick and place robot` and edit the "Easy settings" at the top of that block. `LETTERS` is what visitors build, `TILT_MIN`/`TILT_MAX` is how tilted the blocks are, `SPEED_*` is how fast the robot moves, `TOL_*` is how precise a visitor must be (larger numbers are easier). The buttons are in `index.html` inside `<div class="rig">`.
+- **Colours:** all colours live in the `:root` block at the top of `style.css` (Jet Black, Cerulean Blue, Neon Rose). Change those few values to re-theme the whole site, including the robot.
 - **Loading screen:** `loader.js` plus the `loader` block at the top of `index.html`. It shows real progress (fonts, images, page load). `MIN_MS` is the shortest it will show, `MAX_MS` is the longest it can block the page. Remove the `loader` block and the `loader.js` line from `index.html` to turn it off.
-- Upload `loader.js` to the main folder along with `index.html`, `style.css` and `script.js`.
+- **Logo:** `assets/logo.png` is transparent, so it works on any background colour.

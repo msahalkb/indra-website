@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Indra | Robotics and AI Club, CUSAT</title>
   <meta name="description" content="Indra is a student-driven club at CUSAT for robotics, automation, AI, ML and deep learning. Workshops, lectures, competitions and hands-on projects.">
-  <meta name="theme-color" content="#000000">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23000'/%3E%3Ccircle cx='32' cy='32' r='12' fill='%23FFD21F'/%3E%3C/svg%3E">  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <meta name="theme-color" content="#0A0A0A">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%230A0A0A'/%3E%3Ccircle cx='32' cy='32' r='12' fill='%23FF2D95'/%3E%3C/svg%3E">  <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
@@ -58,9 +58,26 @@
         </div>
       </div>
 
-      <div class="stage" aria-hidden="true">
-        <canvas id="scan"></canvas>
-        <div class="readout"><span id="rdAngle">x 300   z 0   θ 0°</span><span id="rdPts">placed 0/5</span></div>
+      <div class="rig" id="rig">
+        <div class="stage" id="stage" tabindex="0" aria-label="Pick and place robot. Use the buttons below, or click here and use the arrow keys to move and lower, Q and E to rotate, and the space bar to grip.">
+          <canvas id="scan"></canvas>
+          <div class="readout"><span id="rdAngle">x 300   z 34   θ 0°</span><span id="rdPts">placed 0/5</span></div>
+        </div>
+        <p id="rigHint" class="hint" aria-live="polite">Pick up each block and build INDRA on the shelf.</p>
+        <div class="pad" role="group" aria-label="Robot controls">
+          <div class="pad-group"><span class="pad-label">Move</span><div class="pair">
+            <button type="button" data-hold="left" aria-label="Move left">&#9664;</button>
+            <button type="button" data-hold="right" aria-label="Move right">&#9654;</button></div></div>
+          <div class="pad-group"><span class="pad-label">Height</span><div class="pair">
+            <button type="button" data-hold="up" aria-label="Raise">&#9650;</button>
+            <button type="button" data-hold="down" aria-label="Lower">&#9660;</button></div></div>
+          <div class="pad-group"><span class="pad-label">Rotate</span><div class="pair">
+            <button type="button" data-hold="rotL" aria-label="Rotate anticlockwise">&#8634;</button>
+            <button type="button" data-hold="rotR" aria-label="Rotate clockwise">&#8635;</button></div></div>
+          <div class="pad-actions">
+            <button type="button" id="gripBtn" class="btn btn-small" aria-pressed="false">Close grip</button>
+            <button type="button" id="resetBtn" class="btn btn-small btn-ghost">Reset</button></div>
+        </div>
       </div>
     </section>
 

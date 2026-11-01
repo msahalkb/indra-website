@@ -251,155 +251,250 @@
     });
   }
 
-  /* ---------- Hero: gantry robot that picks letter blocks and builds INDRA ---------- */
+  /* ---------- Hero: pick and place robot that you drive yourself ---------- */
   (function () {
     var cv = document.getElementById("scan");
     if (!cv || !cv.getContext) return;
     var ctx = cv.getContext("2d");
-    var stage = cv.parentNode;
+    var stage = document.getElementById("stage") || cv.parentNode;
+    var rig = stage.parentNode;
     var rdA = document.getElementById("rdAngle"), rdP = document.getElementById("rdPts");
+    var hintEl = document.getElementById("rigHint");
+    var gripBtn = document.getElementById("gripBtn"), resetBtn = document.getElementById("resetBtn");
     var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    var PI = Math.PI;
+    var PI = Math.PI, D2R = PI / 180;
 
     /* ---- Easy settings ---- */
-    var LETTERS = ["I", "N", "D", "R", "A"];            // what the robot builds
-    var TILT = [-24, 17, -13, 27, -20];                 // angle each block lies at on the belt (degrees)
-    var SEG = [900, 500, 250, 450, 800, 450, 250, 400]; // ms per step: arrive, lower, grip, lift, move, lower, release, lift
-    var HOLD = 2200, SWEEP = 900;                       // pause when finished, then clear the shelf (ms)
+    var LETTERS = ["I", "N", "D", "R", "A"];            // what you build
+    var TILT_MIN = 14, TILT_MAX = 30;                   // how far (degrees) each block lies tilted on the belt
+    var SPEED_X = 190, SPEED_Y = 150, SPEED_A = 75;     // robot speed: px/s sideways, px/s up-down, degrees/s turning
+    var TOL_X = 11, TOL_Y = 10, TOL_A = 9;              // how precise you must be: px, px, degrees
+
+    /* ---- Colours come from the CSS variables at the top of style.css ---- */
+    var cs = getComputedStyle(document.documentElement);
+    function css(name, fb) { var v = cs.getPropertyValue(name).trim(); return v || fb; }
+    var ACC = css("--accent", "#FF2D95"), BLUE = css("--blue", "#007BA7"), INK = css("--black", "#0A0A0A");
 
     /* ---- Layout (600 x 450 drawing units) ---- */
     var BS = 34, HB = BS / 2, GRIP = 10, OFF = GRIP + HB;
-    var RAIL_Y = 66, UP = 138;
+    var RAIL_Y = 66, HOME_Y = 138, Y_MIN = 104;
     var BELT_TOP = 372, SHELF_TOP = 304, FLOOR = 412;
     var PICK_X = 104, HOME_X = 300, SHELF_CX = 430, PITCH = 48;
-    var N = LETTERS.length, CYC = 0, q;
-    for (q = 0; q < SEG.length; q++) CYC += SEG[q];
-    var WORK = N * CYC, TOTAL = WORK + HOLD + SWEEP;
+    var N = LETTERS.length;
     var W = 0, H = 0, dpr = 1, sc = 1, ox = 0, oy = 0, visible = true;
 
     function slotX(i) { return SHELF_CX + (i - (N - 1) / 2) * PITCH; }
-    function ease(x) { return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; }
-    function out(x) { return 1 - Math.pow(1 - x, 3); }
+    var SH_L = slotX(0) - PITCH / 2 - 8, SH_W = N * PITCH + 16, SH_R = SH_L + SH_W;
+    function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
     function mix(a, b, f) { return a + (b - a) * f; }
+    function out(x) { return 1 - Math.pow(1 - x, 3); }
+    function half(a) { return HB * (Math.abs(Math.cos(a)) + Math.abs(Math.sin(a))); }
+    function wrap90(x) { return ((x + PI / 4) % (PI / 2) + PI / 2) % (PI / 2) - PI / 4; }
+    function surfY(x) { return (x > -10 && x < 204) ? BELT_TOP : (x > SH_L && x < SH_R) ? SHELF_TOP : FLOOR; }
 
-    /* where the gripper must be to grab block i as it lies on the belt */
-    function pickInfo(i) {
-      var a = TILT[i % TILT.length] * PI / 180;
-      var cy = BELT_TOP - HB * (Math.cos(a) + Math.abs(Math.sin(a)));
-      return { a: a, cy: cy, px: PICK_X + OFF * Math.sin(a), py: cy - OFF * Math.cos(a) };
+    /* ---- State ---- */
+    var arm, cur, placed, belt, done, nextAt, gripChecked, goX, msg, msgUntil, now = 0;
+    var keys = { left: false, right: false, up: false, down: false, rotL: false, rotR: false };
+
+    function say(t) { msg = t; msgUntil = now + 2600; }
+    function spawn() {
+      var a = (Math.random() < 0.5 ? -1 : 1) * (TILT_MIN + Math.random() * (TILT_MAX - TILT_MIN)) * D2R;
+      cur = { ch: LETTERS[placed.length], x: reduce ? PICK_X : -40, y: BELT_TOP - half(a), a: a, vy: 0, t: 0, state: reduce ? "rest" : "arriving" };
+    }
+    function reset() {
+      arm = { x: HOME_X, y: HOME_Y, a: 0, g: 0, gt: 0 };
+      placed = []; belt = 0; done = false; nextAt = 0; gripChecked = false; goX = null; msg = ""; msgUntil = 0;
+      spawn();
+      syncGrip();
+    }
+    function syncGrip() {
+      if (!gripBtn) return;
+      gripBtn.textContent = arm.gt ? "Open grip" : "Close grip";
+      gripBtn.setAttribute("aria-pressed", arm.gt ? "true" : "false");
     }
 
-    /* everything on screen is a pure function of time, so the loop is easy to tune */
-    function sample(tt) {
-      tt = tt % TOTAL;
-      var s = { x: HOME_X, y: UP, a: 0, g: 0, blocks: [], placed: 0, belt: 0 }, i, j;
-      if (tt >= WORK) {
-        var r = tt - WORK;
-        var slide = r > HOLD ? ease(Math.min((r - HOLD) / SWEEP, 1)) * 380 : 0;
-        s.x = mix(slotX(N - 1), HOME_X, ease(Math.min(r / 800, 1)));
-        for (i = 0; i < N; i++) s.blocks.push({ x: slotX(i) + slide, y: SHELF_TOP - HB, a: 0, ch: LETTERS[i], hot: false });
-        s.placed = r > HOLD + SWEEP / 2 ? 0 : N;
-        s.belt = N * 150;
-        return s;
+    /* where the block sits relative to the gripper: lx sideways, ly down from the wrist, da angle difference */
+    function rel() {
+      var dx = cur.x - arm.x, dy = cur.y - arm.y, ca = Math.cos(arm.a), sa = Math.sin(arm.a);
+      return { lx: dx * ca + dy * sa, ly: -dx * sa + dy * ca, da: wrap90(cur.a - arm.a) };
+    }
+    function tryGrab() {
+      if (!cur || cur.state !== "rest") { say("The grip closed on nothing. Close it around a block."); return; }
+      var r = rel();
+      if (Math.abs(r.lx) > TOL_X) say("Not centred on the block. Move " + (r.lx > 0 ? "right" : "left") + " a little.");
+      else if (Math.abs(r.ly - OFF) > TOL_Y) say(r.ly > OFF ? "Too high. Lower the gripper a little." : "Too low. Raise the gripper a little.");
+      else if (Math.abs(r.da) > TOL_A * D2R) say("Rotate the gripper to match the block's tilt.");
+      else { cur.state = "held"; say("Got it. Lift and carry it to the shelf."); }
+    }
+    function toggleGrip() {
+      arm.gt = arm.gt ? 0 : 1;
+      if (arm.gt) gripChecked = false;
+      else if (cur && cur.state === "held") { cur.state = "falling"; cur.vy = 0; }
+      syncGrip();
+    }
+    function land(sy, h) {
+      cur.y = sy - h; cur.vy = 0;
+      var slot = slotX(placed.length);
+      if (sy === SHELF_TOP && Math.abs(cur.x - slot) <= TOL_X + 3) {
+        if (Math.abs(cur.a) <= TOL_A * D2R) {
+          placed.push({ ch: cur.ch, x: slot });
+          cur = null;
+          if (placed.length === N) { done = true; say("INDRA assembled."); }
+          else { nextAt = now + 700; say("Placed. Next block coming."); }
+          return;
+        }
+        cur.state = "rest"; say("Not upright. Pick it up, rotate to 0° and try again."); return;
       }
-      i = Math.floor(tt / CYC);
-      var loc = tt - i * CYC, seg = 0;
-      while (seg < SEG.length - 1 && loc >= SEG[seg]) { loc -= SEG[seg]; seg++; }
-      var p = loc / SEG[seg], e = ease(p);
-      var pk = pickInfo(i), fromX = i ? slotX(i - 1) : HOME_X;
-      var shelfY = SHELF_TOP - HB - OFF;
-      for (j = 0; j < i; j++) s.blocks.push({ x: slotX(j), y: SHELF_TOP - HB, a: 0, ch: LETTERS[j], hot: false });
-      s.placed = i;
-      s.belt = i * 150 + (seg === 0 ? out(p) : 1) * 150;
-      var b = { x: PICK_X, y: pk.cy, a: pk.a, ch: LETTERS[i], hot: false };
-      if (seg === 0) { s.x = mix(fromX, pk.px, e); s.a = mix(0, pk.a, e); b.x = mix(-40, PICK_X, out(p)); }
-      else if (seg === 1) { s.x = pk.px; s.a = pk.a; s.y = mix(UP, pk.py, e); }
-      else if (seg === 2) { s.x = pk.px; s.a = pk.a; s.y = pk.py; s.g = e; }
-      else if (seg === 3) { s.x = pk.px; s.a = pk.a; s.y = mix(pk.py, UP, e); s.g = 1; }
-      else if (seg === 4) { s.x = mix(pk.px, slotX(i), e); s.a = mix(pk.a, 0, e); s.g = 1; }
-      else if (seg === 5) { s.x = slotX(i); s.y = mix(UP, shelfY, e); s.g = 1; }
-      else if (seg === 6) { s.x = slotX(i); s.y = shelfY; s.g = 1 - e; }
-      else { s.x = slotX(i); s.y = mix(shelfY, UP, e); }
-      if (seg >= 2 && seg <= 5) {            // carried: follows the gripper
-        b.x = s.x - OFF * Math.sin(s.a); b.y = s.y + OFF * Math.cos(s.a); b.a = s.a; b.hot = true;
-      } else if (seg >= 6) {                 // set down on the shelf
-        b.x = slotX(i); b.y = SHELF_TOP - HB; b.a = 0; s.placed = i + 1;
-      }
-      s.blocks.push(b);
-      return s;
+      cur.state = "rest";
+      say(sy === SHELF_TOP ? "Missed the " + cur.ch + " slot. Pick it up and try again." : "Dropped. Pick it up again.");
     }
 
-    function block(x, y, a, ch, hot) {
+    function update(dt) {
+      var vx = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+      var vy = (keys.down ? 1 : 0) - (keys.up ? 1 : 0);
+      var va = (keys.rotR ? 1 : 0) - (keys.rotL ? 1 : 0);
+      if (vx) { goX = null; arm.x += vx * SPEED_X * dt; }
+      else if (goX !== null) {
+        arm.x += clamp(goX - arm.x, -SPEED_X * dt, SPEED_X * dt);
+        if (Math.abs(goX - arm.x) < 0.5) goX = null;
+      }
+      arm.x = clamp(arm.x, 36, 564);
+      arm.y = Math.max(Y_MIN, arm.y + vy * SPEED_Y * dt);
+      arm.a = clamp(arm.a + va * SPEED_A * D2R * dt, -45 * D2R, 45 * D2R);
+      arm.g = clamp(arm.g + (arm.gt ? 1 : -1) * 3.6 * dt, 0, 1);
+
+      // the gripper cannot go through the belt, shelf or floor
+      var ymax = (cur && cur.state === "held")
+        ? surfY(arm.x - OFF * Math.sin(arm.a)) - half(arm.a) - OFF * Math.cos(arm.a)
+        : surfY(arm.x) - 34;
+      if (arm.y > ymax) arm.y = Math.max(ymax, arm.y - 900 * dt);
+
+      if (arm.gt && arm.g >= 0.9 && !gripChecked) { gripChecked = true; tryGrab(); }
+
+      if (!cur && !done && nextAt && now >= nextAt) { nextAt = 0; spawn(); }
+      if (cur) {
+        if (cur.state === "arriving") {
+          var px = cur.x;
+          cur.t += dt * 1000;
+          var p = Math.min(cur.t / 900, 1);
+          cur.x = mix(-40, PICK_X, out(p));
+          belt += cur.x - px;
+          if (p >= 1) cur.state = "rest";
+        } else if (cur.state === "held") {
+          cur.a = arm.a; cur.x = arm.x - OFF * Math.sin(arm.a); cur.y = arm.y + OFF * Math.cos(arm.a);
+        } else if (cur.state === "falling") {
+          cur.vy += 1400 * dt; cur.y += cur.vy * dt;
+          var sy = surfY(cur.x), h = half(cur.a);
+          if (cur.y + h >= sy) land(sy, h);
+        }
+      }
+    }
+
+    /* the line of help under the robot */
+    function guide() {
+      if (done) return "INDRA assembled. Press Reset to build it again.";
+      if (!cur) return "Next block coming.";
+      if (cur.state === "arriving") return "Block " + cur.ch + " is arriving on the belt.";
+      if (cur.state === "falling") return "";
+      var deg = Math.round(arm.a / D2R);
+      if (cur.state === "held") {
+        var slot = slotX(placed.length);
+        if (Math.abs(cur.x - slot) > TOL_X) return "Carry " + cur.ch + " to the dashed " + cur.ch + " slot on the shelf (move " + (slot > cur.x ? "right" : "left") + ").";
+        if (Math.abs(arm.a) > TOL_A * D2R) return "Rotate back to 0° so the letter stands upright (now " + deg + "°).";
+        if (cur.y < SHELF_TOP - HB - 26) return "Lower it onto the shelf, then open the grip.";
+        return "Open the grip to release it.";
+      }
+      var r = rel();
+      if (Math.abs(r.lx) > TOL_X) return "Move " + (r.lx > 0 ? "right" : "left") + " until the gripper is over block " + cur.ch + ".";
+      if (Math.abs(r.da) > TOL_A * D2R) return "Rotate to about " + Math.round(cur.a / D2R) + "° to match the block (you are at " + deg + "°).";
+      if (Math.abs(r.ly - OFF) > TOL_Y) return r.ly > OFF ? "Lower the gripper onto the block." : "Raise the gripper a little.";
+      return arm.gt ? "Open the grip and try again." : "Close the grip.";
+    }
+
+    /* ---- Drawing ---- */
+    function block(x, y, a, ch, fill) {
       ctx.save(); ctx.translate(x, y); ctx.rotate(a);
-      ctx.fillStyle = hot ? "#FFD21F" : "#fff";
+      ctx.fillStyle = fill;
       ctx.fillRect(-HB, -HB, BS, BS);
-      ctx.fillStyle = "#000"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = INK; ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.font = "900 21px Archivo, 'Arial Black', Arial, sans-serif";
       ctx.fillText(ch, 0, 1);
       ctx.restore();
     }
 
-    function draw(s) {
+    function draw() {
       var i, x, gx, gy;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
       ctx.setTransform(dpr * sc, 0, 0, dpr * sc, dpr * ox, dpr * oy);
-      ctx.fillStyle = "#1a1a1a";
+      ctx.fillStyle = "#16242a";
       for (gy = 15; gy < 450; gy += 30) for (gx = 15; gx < 600; gx += 30) ctx.fillRect(gx - 1, gy - 1, 2, 2);
-      ctx.fillStyle = "#2b2b2b"; ctx.fillRect(0, FLOOR, 600, 2);
+      ctx.fillStyle = "#24363e"; ctx.fillRect(0, FLOOR, 600, 2);
 
       // gantry frame and rail
-      ctx.fillStyle = "#2f2f2f";
+      ctx.fillStyle = "#26363d";
       ctx.fillRect(14, RAIL_Y, 12, FLOOR - RAIL_Y); ctx.fillRect(574, RAIL_Y, 12, FLOOR - RAIL_Y);
-      ctx.fillStyle = "#e8e8e8"; ctx.fillRect(14, RAIL_Y - 4, 572, 10);
+      ctx.fillStyle = "#e8eef1"; ctx.fillRect(14, RAIL_Y - 4, 572, 10);
 
       // conveyor
-      ctx.fillStyle = "#2f2f2f";
+      ctx.fillStyle = "#26363d";
       ctx.fillRect(40, BELT_TOP + 14, 8, FLOOR - BELT_TOP - 14); ctx.fillRect(150, BELT_TOP + 14, 8, FLOOR - BELT_TOP - 14);
-      ctx.fillStyle = "#151515"; ctx.fillRect(-10, BELT_TOP, 214, 14);
-      ctx.strokeStyle = "#555"; ctx.lineWidth = 1; ctx.strokeRect(-9.5, BELT_TOP + 0.5, 213, 13);
-      ctx.fillStyle = "#4a4a4a";
-      for (x = -22 + (s.belt % 22); x < 204; x += 22) ctx.fillRect(x, BELT_TOP + 6, 10, 2);
+      ctx.fillStyle = "#0f181c"; ctx.fillRect(-10, BELT_TOP, 214, 14);
+      ctx.strokeStyle = "#4b6570"; ctx.lineWidth = 1; ctx.strokeRect(-9.5, BELT_TOP + 0.5, 213, 13);
+      ctx.fillStyle = "#3b525c";
+      for (x = -22 + (((belt % 22) + 22) % 22); x < 204; x += 22) ctx.fillRect(x, BELT_TOP + 6, 10, 2);
       for (i = 0; i < 2; i++) {
-        var rx = i ? 196 : 4, ra = s.belt / 7;
-        ctx.fillStyle = "#222"; ctx.strokeStyle = "#777";
+        var rx = i ? 196 : 4, ra = belt / 7;
+        ctx.fillStyle = "#1a272d"; ctx.strokeStyle = "#6d8793";
         ctx.beginPath(); ctx.arc(rx, BELT_TOP + 7, 8, 0, PI * 2); ctx.fill(); ctx.stroke();
         ctx.beginPath(); ctx.moveTo(rx, BELT_TOP + 7); ctx.lineTo(rx + Math.cos(ra) * 7, BELT_TOP + 7 + Math.sin(ra) * 7); ctx.stroke();
       }
+      // pick-up zone
+      ctx.setLineDash([3, 3]); ctx.strokeStyle = BLUE; ctx.lineWidth = 1;
+      ctx.strokeRect(PICK_X - 26, BELT_TOP - 44, 52, 44);
+      ctx.setLineDash([]);
 
-      // shelf with a faint outline of each slot
-      var sl = slotX(0) - PITCH / 2 - 8, sw = N * PITCH + 16;
-      ctx.fillStyle = "#2f2f2f";
-      ctx.fillRect(sl + 14, SHELF_TOP + 10, 8, FLOOR - SHELF_TOP - 10); ctx.fillRect(sl + sw - 22, SHELF_TOP + 10, 8, FLOOR - SHELF_TOP - 10);
-      ctx.fillStyle = "#e8e8e8"; ctx.fillRect(sl, SHELF_TOP, sw, 10);
-      ctx.setLineDash([3, 3]); ctx.strokeStyle = "#444"; ctx.lineWidth = 1;
-      ctx.fillStyle = "#363636"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.font = "900 21px Archivo, 'Arial Black', Arial, sans-serif";
+      // shelf and slots (the slot you need next is highlighted)
+      ctx.fillStyle = "#26363d";
+      ctx.fillRect(SH_L + 14, SHELF_TOP + 10, 8, FLOOR - SHELF_TOP - 10); ctx.fillRect(SH_R - 22, SHELF_TOP + 10, 8, FLOOR - SHELF_TOP - 10);
+      ctx.fillStyle = "#e8eef1"; ctx.fillRect(SH_L, SHELF_TOP, SH_W, 10);
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = "900 21px Archivo, 'Arial Black', Arial, sans-serif"; ctx.lineWidth = 1;
       for (i = 0; i < N; i++) {
+        var next = i === placed.length && !done;
+        ctx.setLineDash([3, 3]); ctx.strokeStyle = next ? ACC : "#2b3f47"; ctx.lineWidth = next ? 1.6 : 1;
         ctx.strokeRect(slotX(i) - HB + 0.5, SHELF_TOP - BS + 0.5, BS - 1, BS - 1);
+        ctx.fillStyle = next ? ACC : "#2b3f47"; ctx.globalAlpha = next ? 0.55 : 1;
         ctx.fillText(LETTERS[i], slotX(i), SHELF_TOP - HB + 1);
+        ctx.globalAlpha = 1;
       }
       ctx.setLineDash([]);
 
-      for (i = 0; i < s.blocks.length; i++) block(s.blocks[i].x, s.blocks[i].y, s.blocks[i].a, s.blocks[i].ch, s.blocks[i].hot);
+      for (i = 0; i < placed.length; i++) block(placed[i].x, SHELF_TOP - HB, 0, placed[i].ch, done ? ACC : "#fff");
+      if (cur) block(cur.x, cur.y, cur.a, cur.ch, cur.state === "held" ? ACC : "#fff");
 
       // carriage, telescoping rod, wrist and gripper
-      var len = s.y - RAIL_Y - 14;
-      ctx.fillStyle = "#fff"; ctx.fillRect(s.x - 2, RAIL_Y + 14, 4, len);
-      ctx.fillStyle = "#bdbdbd"; ctx.fillRect(s.x - 4, RAIL_Y + 14, 8, len * 0.55);
-      ctx.fillStyle = "#FFD21F"; ctx.fillRect(s.x - 24, RAIL_Y - 9, 48, 23);
-      ctx.fillStyle = "#000"; ctx.fillRect(s.x - 17, RAIL_Y - 2, 8, 8); ctx.fillRect(s.x + 9, RAIL_Y - 2, 8, 8);
-      ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(s.a);
+      var len = arm.y - RAIL_Y - 14;
+      ctx.fillStyle = "#fff"; ctx.fillRect(arm.x - 2, RAIL_Y + 14, 4, len);
+      ctx.fillStyle = "#b9c7cd"; ctx.fillRect(arm.x - 4, RAIL_Y + 14, 8, len * 0.55);
+      ctx.fillStyle = BLUE; ctx.fillRect(arm.x - 24, RAIL_Y - 9, 48, 23);
+      ctx.fillStyle = INK; ctx.fillRect(arm.x - 17, RAIL_Y - 2, 8, 8); ctx.fillRect(arm.x + 9, RAIL_Y - 2, 8, 8);
+      ctx.save(); ctx.translate(arm.x, arm.y); ctx.rotate(arm.a);
       ctx.fillStyle = "#fff"; ctx.fillRect(-31, 0, 62, GRIP);
-      var hg = mix(27, HB + 1, s.g);
+      var hg = mix(27, HB + 1, arm.g);
       ctx.fillRect(-hg - 4, GRIP, 4, 22); ctx.fillRect(hg, GRIP, 4, 22);
       ctx.restore();
-      ctx.fillStyle = "#000"; ctx.strokeStyle = "#FFD21F"; ctx.lineWidth = 2.5;
-      ctx.beginPath(); ctx.arc(s.x, s.y, 6, 0, PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = INK; ctx.strokeStyle = ACC; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(arm.x, arm.y, 6, 0, PI * 2); ctx.fill(); ctx.stroke();
     }
 
-    function readout(s) {
-      rdA.textContent = "x " + Math.round(s.x) + "   z " + Math.round(s.y - UP) + "   θ " + Math.round(s.a * 180 / PI) + "°";
-      rdP.textContent = "placed " + s.placed + "/" + N;
+    function readout() {
+      rdA.textContent = "x " + Math.round(arm.x) + "   z " + Math.round(arm.y - Y_MIN) + "   θ " + Math.round(arm.a / D2R) + "°";
+      rdP.textContent = "placed " + placed.length + "/" + N;
+    }
+    var lastHint = "";
+    function hint() {
+      var t = (msg && now < msgUntil) ? msg : guide();
+      if (t && t !== lastHint) { lastHint = t; hintEl.textContent = t; }
     }
 
     function build() {
@@ -412,34 +507,62 @@
       sc = Math.min(W / 600, H / 450); ox = (W - 600 * sc) / 2; oy = (H - 450 * sc) / 2;
     }
 
-    var clock = 0, last = null, lastRead = 0;
+    var last = null, lastRead = 0;
     function tick(t) {
       requestAnimationFrame(tick);
       if (last === null) last = t;
-      var dt = Math.min(t - last, 64); last = t;
+      var dt = Math.min((t - last) / 1000, 0.05); last = t;
       if (!visible || !W) return;
-      // hold the opening frame until the loading screen has gone
-      var ld = document.getElementById("loader");
-      var waiting = ld && !ld.classList.contains("done") && t < 11000;
-      if (!waiting) clock += dt;
-      var s = sample(clock);
-      draw(s);
-      if (t - lastRead > 100) { lastRead = t; readout(s); }
+      now = t;
+      update(dt); draw();
+      if (t - lastRead > 100) { lastRead = t; readout(); hint(); }
     }
 
-    function start() {
-      build();
-      if (!W) return;
-      if (reduce) { var s = sample(WORK + 1000); draw(s); readout(s); }
+    /* ---- Controls: on-screen buttons (hold to move), keyboard, tap the scene to send the gantry there ---- */
+    function nudge(k) {
+      if (k === "left") arm.x -= 20; else if (k === "right") arm.x += 20;
+      else if (k === "up") arm.y -= 14; else if (k === "down") arm.y += 14;
+      else if (k === "rotL") arm.a -= 5 * D2R; else if (k === "rotR") arm.a += 5 * D2R;
     }
+    [].forEach.call(rig.querySelectorAll("[data-hold]"), function (b) {
+      var k = b.getAttribute("data-hold");
+      function up() { keys[k] = false; b.classList.remove("on"); }
+      b.addEventListener("pointerdown", function (e) {
+        e.preventDefault(); keys[k] = true; b.classList.add("on");
+        try { b.setPointerCapture(e.pointerId); } catch (x) {}
+      });
+      b.addEventListener("pointerup", up);
+      b.addEventListener("pointercancel", up);
+      b.addEventListener("lostpointercapture", up);
+      b.addEventListener("click", function (e) { if (e.detail === 0) nudge(k); }); // keyboard press on a focused button
+    });
+    var pad = rig.querySelector(".pad");
+    if (pad) pad.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+    if (gripBtn) gripBtn.addEventListener("click", toggleGrip);
+    if (resetBtn) resetBtn.addEventListener("click", reset);
 
-    start();
-    if (document.fonts && document.fonts.ready) document.fonts.ready.then(start);
+    var KEYMAP = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", q: "rotL", Q: "rotL", e: "rotR", E: "rotR" };
+    stage.addEventListener("keydown", function (e) {
+      var k = KEYMAP[e.key];
+      if (k) { keys[k] = true; e.preventDefault(); }
+      else if (e.key === " " || e.key === "Enter") { e.preventDefault(); if (!e.repeat) toggleGrip(); }
+      else if (e.key === "r" || e.key === "R") { reset(); }
+    });
+    stage.addEventListener("keyup", function (e) { var k = KEYMAP[e.key]; if (k) keys[k] = false; });
+    stage.addEventListener("blur", function () { for (var k in keys) keys[k] = false; });
+    stage.addEventListener("pointerdown", function (e) {
+      try { stage.focus({ preventScroll: true }); } catch (x) { stage.focus(); }
+      var r = stage.getBoundingClientRect();
+      goX = clamp((e.clientX - r.left - ox) / sc, 36, 564);
+    });
+
+    reset();
+    build();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(build);
     if ("ResizeObserver" in window) {
       var rt;
-      new ResizeObserver(function () { clearTimeout(rt); rt = setTimeout(start, 120); }).observe(stage);
+      new ResizeObserver(function () { clearTimeout(rt); rt = setTimeout(build, 120); }).observe(stage);
     }
-    if (reduce) return;
     if ("IntersectionObserver" in window) {
       new IntersectionObserver(function (e) { visible = e[0].isIntersecting; }).observe(stage);
     }

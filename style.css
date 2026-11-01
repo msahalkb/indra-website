@@ -205,3 +205,21 @@ dialog#lightbox::backdrop { background: rgba(0,0,0,.9); }
   html { scroll-behavior: auto; }
   * { transition: none !important; }
 }
+
+/* Loading screen */
+.loader {
+  position: fixed; inset: 0; z-index: 1000; background: #000;
+  display: grid; place-items: center;
+  transition: opacity .55s ease, visibility .55s;
+  animation: loaderFailsafe .4s 10s forwards;
+}
+.loader.done { opacity: 0; visibility: hidden; }
+@keyframes loaderFailsafe { to { opacity: 0; visibility: hidden; } }
+.loader-inner { width: min(78vw, 420px); display: grid; gap: 18px; }
+.loader-logo { position: relative; aspect-ratio: 453 / 198; }
+.loader-logo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.loader-logo .base { filter: brightness(.28); }
+.loader-logo .lit { clip-path: inset(0 100% 0 0); }
+.scanline { position: absolute; top: -6%; bottom: -6%; left: 0; width: 2px; background: var(--yellow); box-shadow: 0 0 14px 2px rgba(255, 210, 31, .6); }
+.loader-meta { display: flex; justify-content: space-between; align-items: baseline; color: var(--grey); font-weight: 500; }
+.pct { font-family: var(--display); font-stretch: 125%; font-weight: 900; font-size: 2rem; line-height: 1; color: #fff; font-variant-numeric: tabular-nums; }

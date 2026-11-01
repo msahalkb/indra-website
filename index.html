@@ -3,15 +3,31 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Indra | Robotics Club, CUSAT</title>
+  <title>Indra | Robotics and AI Club, CUSAT</title>
   <meta name="description" content="Indra is a student-driven club at CUSAT for robotics, automation, AI, ML and deep learning. Workshops, lectures, competitions and hands-on projects.">
   <meta name="theme-color" content="#000000">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23000'/%3E%3Ccircle cx='32' cy='32' r='12' fill='%23FFD21F'/%3E%3C/svg%3E">  <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <noscript><style>.loader{display:none}</style></noscript>
 </head>
 <body>
+
+  <div id="loader" class="loader">
+    <div class="loader-inner">
+      <div class="loader-logo">
+        <img class="base" src="assets/logo.png" alt="" width="453" height="198">
+        <img id="loaderReveal" class="lit" src="assets/logo.png" alt="" width="453" height="198">
+        <span id="loaderLine" class="scanline" aria-hidden="true"></span>
+      </div>
+      <div class="loader-meta">
+        <span id="loaderStatus" role="status">Booting sensors</span>
+        <span id="loaderPct" class="pct" aria-hidden="true">0%</span>
+      </div>
+    </div>
+  </div>
+  <script src="loader.js"></script>
 
   <a class="skip" href="#main">Skip to content</a>
 
@@ -34,8 +50,8 @@
     <section class="hero" id="top">
       <div class="hero-text">
         <p class="hero-kicker">Student club, CUSAT</p>
-        <h1>Challenge your limits…</h1>
-        <p class="hero-sub">Indra is where CUSAT students learn robotics, automation and AI by building real things .</p>
+        <h1>We build machines that think.</h1>
+        <p class="hero-sub">Indra is where CUSAT students learn robotics, automation and AI by building real things and taking them to competitions.</p>
         <div class="hero-actions">
           <a class="btn" href="#events">See events</a>
           <a class="btn btn-ghost" href="#about">About the club</a>
@@ -44,7 +60,7 @@
 
       <div class="stage" aria-hidden="true">
         <canvas id="scan"></canvas>
-        <div class="readout"><span id="rdAngle">bearing +000</span><span id="rdPts">0 returns</span></div>
+        <div class="readout"><span id="rdAngle">x 300   z 0   θ 0°</span><span id="rdPts">placed 0/5</span></div>
       </div>
     </section>
 
@@ -132,7 +148,7 @@
 
   <footer class="footer">
     <a class="brand" href="#top" aria-label="Indra home"><img class="logo" src="assets/logo.png" alt="Indra" width="453" height="198"></a>
-    <span>Indra Robotics club, CUSAT</span>
+    <span>Robotics and AI club, CUSAT</span>
     <span id="year"></span>
   </footer>
 

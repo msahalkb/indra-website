@@ -251,7 +251,7 @@
     });
   }
 
-  /* ---------- Hero: LiDAR scan that reveals the wordmark ---------- */
+  /* ---------- Hero: gantry robot that picks letter blocks and builds INDRA ---------- */
   (function () {
     var cv = document.getElementById("scan");
     if (!cv || !cv.getContext) return;
@@ -259,132 +259,178 @@
     var stage = cv.parentNode;
     var rdA = document.getElementById("rdAngle"), rdP = document.getElementById("rdPts");
     var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    var PI = Math.PI, TAU = PI * 2;
-    var W = 0, H = 0, pts = [], ox = 0, oy = 0, tox = 0, toy = 0, visible = true;
-    var prevB = null, lastRead = 0, lastT = 0;
+    var PI = Math.PI;
 
-    function addArc(cx, cy, r, step) {
-      var n = Math.max(8, Math.round(TAU * r / step));
-      for (var i = 0; i < n; i++) pts.push({ x: cx + Math.cos(i / n * TAU) * r, y: cy + Math.sin(i / n * TAU) * r, l: 0, a: 0 });
+    /* ---- Easy settings ---- */
+    var LETTERS = ["I", "N", "D", "R", "A"];            // what the robot builds
+    var TILT = [-24, 17, -13, 27, -20];                 // angle each block lies at on the belt (degrees)
+    var SEG = [900, 500, 250, 450, 800, 450, 250, 400]; // ms per step: arrive, lower, grip, lift, move, lower, release, lift
+    var HOLD = 2200, SWEEP = 900;                       // pause when finished, then clear the shelf (ms)
+
+    /* ---- Layout (600 x 450 drawing units) ---- */
+    var BS = 34, HB = BS / 2, GRIP = 10, OFF = GRIP + HB;
+    var RAIL_Y = 66, UP = 138;
+    var BELT_TOP = 372, SHELF_TOP = 304, FLOOR = 412;
+    var PICK_X = 104, HOME_X = 300, SHELF_CX = 430, PITCH = 48;
+    var N = LETTERS.length, CYC = 0, q;
+    for (q = 0; q < SEG.length; q++) CYC += SEG[q];
+    var WORK = N * CYC, TOTAL = WORK + HOLD + SWEEP;
+    var W = 0, H = 0, dpr = 1, sc = 1, ox = 0, oy = 0, visible = true;
+
+    function slotX(i) { return SHELF_CX + (i - (N - 1) / 2) * PITCH; }
+    function ease(x) { return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; }
+    function out(x) { return 1 - Math.pow(1 - x, 3); }
+    function mix(a, b, f) { return a + (b - a) * f; }
+
+    /* where the gripper must be to grab block i as it lies on the belt */
+    function pickInfo(i) {
+      var a = TILT[i % TILT.length] * PI / 180;
+      var cy = BELT_TOP - HB * (Math.cos(a) + Math.abs(Math.sin(a)));
+      return { a: a, cy: cy, px: PICK_X + OFF * Math.sin(a), py: cy - OFF * Math.cos(a) };
     }
-    function addLine(x1, y1, x2, y2, step) {
-      var len = Math.hypot(x2 - x1, y2 - y1), n = Math.max(2, Math.round(len / step));
-      for (var i = 0; i <= n; i++) pts.push({ x: x1 + (x2 - x1) * i / n, y: y1 + (y2 - y1) * i / n, l: 0, a: 0 });
+
+    /* everything on screen is a pure function of time, so the loop is easy to tune */
+    function sample(tt) {
+      tt = tt % TOTAL;
+      var s = { x: HOME_X, y: UP, a: 0, g: 0, blocks: [], placed: 0, belt: 0 }, i, j;
+      if (tt >= WORK) {
+        var r = tt - WORK;
+        var slide = r > HOLD ? ease(Math.min((r - HOLD) / SWEEP, 1)) * 380 : 0;
+        s.x = mix(slotX(N - 1), HOME_X, ease(Math.min(r / 800, 1)));
+        for (i = 0; i < N; i++) s.blocks.push({ x: slotX(i) + slide, y: SHELF_TOP - HB, a: 0, ch: LETTERS[i], hot: false });
+        s.placed = r > HOLD + SWEEP / 2 ? 0 : N;
+        s.belt = N * 150;
+        return s;
+      }
+      i = Math.floor(tt / CYC);
+      var loc = tt - i * CYC, seg = 0;
+      while (seg < SEG.length - 1 && loc >= SEG[seg]) { loc -= SEG[seg]; seg++; }
+      var p = loc / SEG[seg], e = ease(p);
+      var pk = pickInfo(i), fromX = i ? slotX(i - 1) : HOME_X;
+      var shelfY = SHELF_TOP - HB - OFF;
+      for (j = 0; j < i; j++) s.blocks.push({ x: slotX(j), y: SHELF_TOP - HB, a: 0, ch: LETTERS[j], hot: false });
+      s.placed = i;
+      s.belt = i * 150 + (seg === 0 ? out(p) : 1) * 150;
+      var b = { x: PICK_X, y: pk.cy, a: pk.a, ch: LETTERS[i], hot: false };
+      if (seg === 0) { s.x = mix(fromX, pk.px, e); s.a = mix(0, pk.a, e); b.x = mix(-40, PICK_X, out(p)); }
+      else if (seg === 1) { s.x = pk.px; s.a = pk.a; s.y = mix(UP, pk.py, e); }
+      else if (seg === 2) { s.x = pk.px; s.a = pk.a; s.y = pk.py; s.g = e; }
+      else if (seg === 3) { s.x = pk.px; s.a = pk.a; s.y = mix(pk.py, UP, e); s.g = 1; }
+      else if (seg === 4) { s.x = mix(pk.px, slotX(i), e); s.a = mix(pk.a, 0, e); s.g = 1; }
+      else if (seg === 5) { s.x = slotX(i); s.y = mix(UP, shelfY, e); s.g = 1; }
+      else if (seg === 6) { s.x = slotX(i); s.y = shelfY; s.g = 1 - e; }
+      else { s.x = slotX(i); s.y = mix(shelfY, UP, e); }
+      if (seg >= 2 && seg <= 5) {            // carried: follows the gripper
+        b.x = s.x - OFF * Math.sin(s.a); b.y = s.y + OFF * Math.cos(s.a); b.a = s.a; b.hot = true;
+      } else if (seg >= 6) {                 // set down on the shelf
+        b.x = slotX(i); b.y = SHELF_TOP - HB; b.a = 0; s.placed = i + 1;
+      }
+      s.blocks.push(b);
+      return s;
+    }
+
+    function block(x, y, a, ch, hot) {
+      ctx.save(); ctx.translate(x, y); ctx.rotate(a);
+      ctx.fillStyle = hot ? "#FFD21F" : "#fff";
+      ctx.fillRect(-HB, -HB, BS, BS);
+      ctx.fillStyle = "#000"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = "900 21px Archivo, 'Arial Black', Arial, sans-serif";
+      ctx.fillText(ch, 0, 1);
+      ctx.restore();
+    }
+
+    function draw(s) {
+      var i, x, gx, gy;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+      ctx.setTransform(dpr * sc, 0, 0, dpr * sc, dpr * ox, dpr * oy);
+      ctx.fillStyle = "#1a1a1a";
+      for (gy = 15; gy < 450; gy += 30) for (gx = 15; gx < 600; gx += 30) ctx.fillRect(gx - 1, gy - 1, 2, 2);
+      ctx.fillStyle = "#2b2b2b"; ctx.fillRect(0, FLOOR, 600, 2);
+
+      // gantry frame and rail
+      ctx.fillStyle = "#2f2f2f";
+      ctx.fillRect(14, RAIL_Y, 12, FLOOR - RAIL_Y); ctx.fillRect(574, RAIL_Y, 12, FLOOR - RAIL_Y);
+      ctx.fillStyle = "#e8e8e8"; ctx.fillRect(14, RAIL_Y - 4, 572, 10);
+
+      // conveyor
+      ctx.fillStyle = "#2f2f2f";
+      ctx.fillRect(40, BELT_TOP + 14, 8, FLOOR - BELT_TOP - 14); ctx.fillRect(150, BELT_TOP + 14, 8, FLOOR - BELT_TOP - 14);
+      ctx.fillStyle = "#151515"; ctx.fillRect(-10, BELT_TOP, 214, 14);
+      ctx.strokeStyle = "#555"; ctx.lineWidth = 1; ctx.strokeRect(-9.5, BELT_TOP + 0.5, 213, 13);
+      ctx.fillStyle = "#4a4a4a";
+      for (x = -22 + (s.belt % 22); x < 204; x += 22) ctx.fillRect(x, BELT_TOP + 6, 10, 2);
+      for (i = 0; i < 2; i++) {
+        var rx = i ? 196 : 4, ra = s.belt / 7;
+        ctx.fillStyle = "#222"; ctx.strokeStyle = "#777";
+        ctx.beginPath(); ctx.arc(rx, BELT_TOP + 7, 8, 0, PI * 2); ctx.fill(); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(rx, BELT_TOP + 7); ctx.lineTo(rx + Math.cos(ra) * 7, BELT_TOP + 7 + Math.sin(ra) * 7); ctx.stroke();
+      }
+
+      // shelf with a faint outline of each slot
+      var sl = slotX(0) - PITCH / 2 - 8, sw = N * PITCH + 16;
+      ctx.fillStyle = "#2f2f2f";
+      ctx.fillRect(sl + 14, SHELF_TOP + 10, 8, FLOOR - SHELF_TOP - 10); ctx.fillRect(sl + sw - 22, SHELF_TOP + 10, 8, FLOOR - SHELF_TOP - 10);
+      ctx.fillStyle = "#e8e8e8"; ctx.fillRect(sl, SHELF_TOP, sw, 10);
+      ctx.setLineDash([3, 3]); ctx.strokeStyle = "#444"; ctx.lineWidth = 1;
+      ctx.fillStyle = "#363636"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = "900 21px Archivo, 'Arial Black', Arial, sans-serif";
+      for (i = 0; i < N; i++) {
+        ctx.strokeRect(slotX(i) - HB + 0.5, SHELF_TOP - BS + 0.5, BS - 1, BS - 1);
+        ctx.fillText(LETTERS[i], slotX(i), SHELF_TOP - HB + 1);
+      }
+      ctx.setLineDash([]);
+
+      for (i = 0; i < s.blocks.length; i++) block(s.blocks[i].x, s.blocks[i].y, s.blocks[i].a, s.blocks[i].ch, s.blocks[i].hot);
+
+      // carriage, telescoping rod, wrist and gripper
+      var len = s.y - RAIL_Y - 14;
+      ctx.fillStyle = "#fff"; ctx.fillRect(s.x - 2, RAIL_Y + 14, 4, len);
+      ctx.fillStyle = "#bdbdbd"; ctx.fillRect(s.x - 4, RAIL_Y + 14, 8, len * 0.55);
+      ctx.fillStyle = "#FFD21F"; ctx.fillRect(s.x - 24, RAIL_Y - 9, 48, 23);
+      ctx.fillStyle = "#000"; ctx.fillRect(s.x - 17, RAIL_Y - 2, 8, 8); ctx.fillRect(s.x + 9, RAIL_Y - 2, 8, 8);
+      ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(s.a);
+      ctx.fillStyle = "#fff"; ctx.fillRect(-31, 0, 62, GRIP);
+      var hg = mix(27, HB + 1, s.g);
+      ctx.fillRect(-hg - 4, GRIP, 4, 22); ctx.fillRect(hg, GRIP, 4, 22);
+      ctx.restore();
+      ctx.fillStyle = "#000"; ctx.strokeStyle = "#FFD21F"; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(s.x, s.y, 6, 0, PI * 2); ctx.fill(); ctx.stroke();
+    }
+
+    function readout(s) {
+      rdA.textContent = "x " + Math.round(s.x) + "   z " + Math.round(s.y - UP) + "   θ " + Math.round(s.a * 180 / PI) + "°";
+      rdP.textContent = "placed " + s.placed + "/" + N;
     }
 
     function build() {
       var r = stage.getBoundingClientRect();
       W = Math.round(r.width); H = Math.round(r.height);
       if (!W || !H) return;
-      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
       cv.width = W * dpr; cv.height = H * dpr;
       cv.style.width = W + "px"; cv.style.height = H + "px";
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      pts = [];
-
-      var off = document.createElement("canvas");
-      off.width = W; off.height = H;
-      var o = off.getContext("2d");
-      o.fillStyle = "#000"; o.textAlign = "center"; o.textBaseline = "middle";
-      var fs = W * 0.3;
-      function setFont() { o.font = "900 " + fs + "px Archivo, 'Arial Black', Arial, sans-serif"; }
-      setFont();
-      while (o.measureText("INDRA").width > W * 0.82 && fs > 12) { fs -= 2; setFont(); }
-      o.fillText("INDRA", W / 2, H * 0.36);
-      var data = o.getImageData(0, 0, W, H).data;
-      var step = Math.max(4, Math.round(W / 105));
-      for (var y = 0; y < H; y += step)
-        for (var x = 0; x < W; x += step)
-          if (data[(y * W + x) * 4 + 3] > 128) pts.push({ x: x, y: y, l: 0, a: 0 });
-
-      // the "room" around the robot: walls and two obstacles
-      var m = Math.round(W * 0.03), s2 = step * 1.6;
-      addLine(m, m, W - m, m, s2); addLine(m, m, m, H - m, s2); addLine(W - m, m, W - m, H - m, s2);
-      addLine(m, H - m, W - m, H - m, s2);
-      addArc(W * 0.19, H * 0.68, W * 0.06, s2);
-      addArc(W * 0.83, H * 0.7, W * 0.045, s2);
-
-      ox = tox = W / 2; oy = toy = H * 0.9;
-      prevB = null;
+      sc = Math.min(W / 600, H / 450); ox = (W - 600 * sc) / 2; oy = (H - 450 * sc) / 2;
     }
 
-    function angles() {
-      for (var i = 0; i < pts.length; i++) {
-        var a = Math.atan2(pts[i].y - oy, pts[i].x - ox);
-        pts[i].a = a < 0 ? a + TAU : a;
-      }
-    }
-
-    function draw(B, sign) {
-      ctx.clearRect(0, 0, W, H);
-      var R = Math.hypot(W, H);
-      if (B !== null) {
-        ctx.fillStyle = "rgba(255,210,31,0.09)";
-        ctx.beginPath();
-        ctx.moveTo(ox, oy);
-        ctx.lineTo(ox + Math.cos(B) * R, oy + Math.sin(B) * R);
-        ctx.lineTo(ox + Math.cos(B - sign * 0.26) * R, oy + Math.sin(B - sign * 0.26) * R);
-        ctx.closePath(); ctx.fill();
-        ctx.strokeStyle = "rgba(255,210,31,0.75)"; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox + Math.cos(B) * R, oy + Math.sin(B) * R); ctx.stroke();
-      }
-      ctx.fillStyle = "rgba(255,255,255,0.22)";
-      var i, p, lit = 0;
-      for (i = 0; i < pts.length; i++) {
-        p = pts[i];
-        if (p.l <= 0.02) ctx.fillRect(p.x - 1, p.y - 1, 2, 2);
-      }
-      for (i = 0; i < pts.length; i++) {
-        p = pts[i];
-        if (p.l > 0.02) {
-          lit++;
-          ctx.fillStyle = "rgba(255,210,31," + (0.25 + p.l * 0.75).toFixed(2) + ")";
-          var sz = 2 + p.l * 1.6;
-          ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
-        }
-      }
-      // the sensor
-      ctx.fillStyle = "#000"; ctx.strokeStyle = "#FFD21F"; ctx.lineWidth = 2.5;
-      ctx.beginPath(); ctx.arc(ox, oy, 7, 0, TAU); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = "#FFD21F"; ctx.beginPath(); ctx.arc(ox, oy, 2.2, 0, TAU); ctx.fill();
-      return lit;
-    }
-
+    var clock = 0, last = null, lastRead = 0;
     function tick(t) {
       requestAnimationFrame(tick);
+      if (last === null) last = t;
+      var dt = Math.min(t - last, 64); last = t;
       if (!visible || !W) return;
-      var dt = Math.min(t - lastT, 64); lastT = t;
-      ox += (tox - ox) * 0.08; oy += (toy - oy) * 0.08;
-      angles();
-      var B = 1.5 * PI + Math.sin(t * 0.0008) * 0.53 * PI;
-      var from = prevB === null ? B : prevB;
-      var sign = B >= from ? 1 : -1;
-      var lo = Math.min(from, B) - 0.006, hi = Math.max(from, B) + 0.006;
-      for (var i = 0; i < pts.length; i++) {
-        var p = pts[i];
-        if (p.a >= lo && p.a <= hi) p.l = 1;
-        else if (p.l > 0) p.l = Math.max(0, p.l - dt / 4800);
-      }
-      prevB = B;
-      var lit = draw(B, sign);
-      if (t - lastRead > 120) {
-        lastRead = t;
-        var deg = Math.round((B - 1.5 * PI) * 180 / PI);
-        var ds = String(Math.abs(deg)); while (ds.length < 3) ds = "0" + ds;
-        rdA.textContent = "bearing " + (deg < 0 ? "-" : "+") + ds;
-        rdP.textContent = lit + " returns";
-      }
+      // hold the opening frame until the loading screen has gone
+      var ld = document.getElementById("loader");
+      var waiting = ld && !ld.classList.contains("done") && t < 11000;
+      if (!waiting) clock += dt;
+      var s = sample(clock);
+      draw(s);
+      if (t - lastRead > 100) { lastRead = t; readout(s); }
     }
 
     function start() {
       build();
       if (!W) return;
-      if (reduce) {
-        angles();
-        pts.forEach(function (p) { p.l = 0.85; });
-        draw(null, 1);
-        rdA.textContent = "scan complete"; rdP.textContent = pts.length + " returns";
-      }
+      if (reduce) { var s = sample(WORK + 1000); draw(s); readout(s); }
     }
 
     start();
@@ -397,12 +443,6 @@
     if ("IntersectionObserver" in window) {
       new IntersectionObserver(function (e) { visible = e[0].isIntersecting; }).observe(stage);
     }
-    stage.addEventListener("pointermove", function (e) {
-      var r = stage.getBoundingClientRect();
-      tox = Math.min(Math.max(e.clientX - r.left, W * 0.1), W * 0.9);
-      toy = Math.min(Math.max(e.clientY - r.top, H * 0.62), H * 0.95);
-    });
-    stage.addEventListener("pointerleave", function () { tox = W / 2; toy = H * 0.9; });
     requestAnimationFrame(tick);
   })();
 })();
